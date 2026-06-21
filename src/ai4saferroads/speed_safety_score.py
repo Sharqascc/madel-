@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict, Any
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict
 
 import numpy as np
 import pandas as pd
+import yaml
 
 
-DEFAULT_WEIGHTS = {
+DEFAULT_WEIGHTS: Dict[str, float] = {
     "speed_gap": 0.35,
     "operating_speed": 0.20,
     "vru_exposure": 0.25,
@@ -20,246 +22,233 @@ class ScoreConfig:
     safe_speed_mixed_vru_kph: float = 30.0
     safe_speed_side_conflict_kph: float = 50.0
     safe_speed_head_on_kph: float = 70.0
-    weights: Dict[str, float] | None = None
+    weights: Dict[str, float] = field(default_factory=lambda: DEFAULT_WEIGHTS.copy())
+    thresholds: Dict[str, float] = field(default_factory=lambda: {
+        "high_priority_review": 40.0,
+        "review": 60.0,
+        "monitor": 80.0,
+    })
+    escalation: Dict[str, float | bool] = field(default_factory=lambda: {
+        "enable_vru_escalation": True,
+        "vru_high_risk_score_threshold": 50.0,
+        "posted_speed_escalation_threshold_kph": 60.0,
+    })
 
-    def __post_init__(self):
-        if self.weights is None:
-            self.weights = DEFAULT_WEIGHTS.copy()
+
+def load_score_config(config_path: str = "configs/scoring.yaml") -> ScoreConfig:
+    path = Path(config_path)
+    if not path.exists():
+        return ScoreConfig()
+
+    with path.open("r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+
+    weights = DEFAULT_WEIGHTS.copy()
+    weights.update(raw.get("weights", {}) or {})
+
+    thresholds = {
+        "high_priority_review": 40.0,
+        "review": 60.0,
+        "monitor": 80.0,
+    }
+    thresholds.update(raw.get("thresholds", {}) or {})
+
+    escalation = {
+        "enable_vru_escalation": True,
+        "vru_high_risk_score_threshold": 50.0,
+        "posted_speed_escalation_threshold_kph": 60.0,
+    }
+    escalation.update(raw.get("escalation", {}) or {})
+
+    safe_speeds = raw.get("safe_speeds", {}) or {}
+
+    return ScoreConfig(
+        safe_speed_mixed_vru_kph=float(safe_speeds.get("mixed_vru", 30.0)),
+        safe_speed_side_conflict_kph=float(safe_speeds.get("side_conflict", 50.0)),
+        safe_speed_head_on_kph=float(safe_speeds.get("head_on", 70.0)),
+        weights=weights,
+        thresholds=thresholds,
+        escalation=escalation,
+    )
 
 
-def _clip_0_100(value: pd.Series) -> pd.Series:
-    return value.clip(lower=0, upper=100)
+def _clip_0_100(values: pd.Series | np.ndarray | float) -> pd.Series:
+    return pd.Series(np.clip(values, 0.0, 100.0))
 
 
-def _normalize_flag(series: pd.Series) -> pd.Series:
-    return series.fillna(0).astype(float).clip(0, 1)
+def _series(df: pd.DataFrame, col: str, default: float = 0.0) -> pd.Series:
+    if col in df.columns:
+        return pd.to_numeric(df[col], errors="coerce").fillna(default)
+    return pd.Series(default, index=df.index, dtype=float)
+
+
+def derive_safe_system_reference_speed(df: pd.DataFrame, config: ScoreConfig) -> pd.Series:
+    pedestrian = _series(df, "pedestrian_activity", 0.0)
+    cyclist = _series(df, "cyclist_activity", 0.0)
+    school_zone = _series(df, "school_zone", 0.0)
+    market_zone = _series(df, "market_zone", 0.0)
+    urban = _series(df, "urban", 0.0)
+    intersection_density = _series(df, "intersection_density", 0.0)
+    divided = _series(df, "divided_road", 0.0)
+
+    mixed_vru = (
+        (pedestrian > 0)
+        | (cyclist > 0)
+        | (school_zone > 0)
+        | (market_zone > 0)
+    )
+
+    side_conflict = (
+        (urban > 0)
+        | (intersection_density >= 3)
+        | (divided <= 0)
+    )
+
+    ref = np.where(
+        mixed_vru,
+        config.safe_speed_mixed_vru_kph,
+        np.where(
+            side_conflict,
+            config.safe_speed_side_conflict_kph,
+            config.safe_speed_head_on_kph,
+        ),
+    )
+    return pd.Series(ref, index=df.index, dtype=float)
 
 
 def compute_speed_limit_gap_score(
     posted_speed_limit_kph: pd.Series,
-    safe_system_reference_speed_kph: pd.Series
+    safe_system_reference_speed_kph: pd.Series,
 ) -> pd.Series:
-    gap = posted_speed_limit_kph - safe_system_reference_speed_kph
-    return _clip_0_100((gap.clip(lower=0) / 40.0) * 100.0)
+    gap = (posted_speed_limit_kph - safe_system_reference_speed_kph).clip(lower=0.0)
+    raw = 100.0 - (gap / 40.0) * 100.0
+    return _clip_0_100(raw)
 
 
 def compute_operating_speed_score(
     operating_speed_kph: pd.Series,
-    posted_speed_limit_kph: pd.Series
+    posted_speed_limit_kph: pd.Series,
 ) -> pd.Series:
-    excess = (operating_speed_kph - posted_speed_limit_kph).clip(lower=0)
-    return _clip_0_100((excess / 20.0) * 100.0)
+    excess = (operating_speed_kph - posted_speed_limit_kph).clip(lower=0.0)
+    raw = 100.0 - (excess / 30.0) * 100.0
+    return _clip_0_100(raw)
 
 
 def compute_vru_exposure_score(df: pd.DataFrame) -> pd.Series:
-    ped = _normalize_flag(df["pedestrian_presence"])
-    cyc = _normalize_flag(df["cyclist_presence"])
-    ptw = _normalize_flag(df["ptw_presence"])
-    cross = _normalize_flag(df["crossing_density_flag"])
-    comm = _normalize_flag(df["commercial_frontage_flag"])
-    transit = _normalize_flag(df["transit_stop_flag"])
-    school = _normalize_flag(df["school_zone_flag"])
+    pedestrian = _series(df, "pedestrian_activity", 0.0)
+    cyclist = _series(df, "cyclist_activity", 0.0)
+    ptw = _series(df, "ptw_activity", 0.0)
+    crossing_density = _series(df, "crossing_density", 0.0)
+    commercial_frontage = _series(df, "commercial_frontage", 0.0)
+    transit_stop = _series(df, "transit_stop", 0.0)
+    school_zone = _series(df, "school_zone", 0.0)
 
-    score = (
-        ped * 30
-        + cyc * 20
-        + ptw * 15
-        + cross * 15
-        + comm * 10
-        + transit * 5
-        + school * 5
+    raw_risk = (
+        pedestrian * 30.0
+        + cyclist * 20.0
+        + ptw * 15.0
+        + crossing_density * 15.0
+        + commercial_frontage * 10.0
+        + transit_stop * 5.0
+        + school_zone * 5.0
     )
-    return _clip_0_100(score)
+    return _clip_0_100(100.0 - raw_risk)
 
 
 def compute_context_score(df: pd.DataFrame) -> pd.Series:
-    urban = _normalize_flag(df["urban_flag"])
-    intersection = _normalize_flag(df["intersection_density_flag"])
-    roadside = _normalize_flag(df["roadside_activity_flag"])
-    non_sep = _normalize_flag(df["non_separated_traffic_flag"])
+    urban = _series(df, "urban", 0.0)
+    intersection_density = _series(df, "intersection_density", 0.0)
+    roadside_activity = _series(df, "roadside_activity", 0.0)
+    non_separated_traffic = _series(df, "non_separated_traffic", 0.0)
 
-    score = (
-        urban * 30
-        + intersection * 25
-        + roadside * 25
-        + non_sep * 20
+    raw_risk = (
+        urban * 30.0
+        + intersection_density * 25.0
+        + roadside_activity * 25.0
+        + non_separated_traffic * 20.0
     )
-    return _clip_0_100(score)
+    return _clip_0_100(100.0 - raw_risk)
+
+
+def compute_speed_safety_score(
+    speed_limit_gap_score: pd.Series,
+    operating_speed_score: pd.Series,
+    vru_exposure_score: pd.Series,
+    context_score: pd.Series,
+    weights: Dict[str, float],
+) -> pd.Series:
+    total = (
+        speed_limit_gap_score * weights["speed_gap"]
+        + operating_speed_score * weights["operating_speed"]
+        + vru_exposure_score * weights["vru_exposure"]
+        + context_score * weights["road_context"]
+    )
+    return _clip_0_100(total)
 
 
 def assign_priority_label(
-    speed_safety_score: pd.Series,
+    score: pd.Series,
+    posted_speed_limit_kph: pd.Series | None = None,
+    safe_system_reference_speed_kph: pd.Series | None = None,
     vru_exposure_score: pd.Series | None = None,
-    speed_limit_gap_score: pd.Series | None = None
+    config: ScoreConfig | None = None,
 ) -> pd.Series:
-    if vru_exposure_score is None or speed_limit_gap_score is None:
-        return pd.Series(
-            np.select(
-                [
-                    speed_safety_score >= 80,
-                    speed_safety_score >= 60,
-                    speed_safety_score >= 40,
-                ],
-                [
-                    "high_priority_review",
-                    "review",
-                    "monitor",
-                ],
-                default="aligned",
-            ),
-            index=speed_safety_score.index,
-        )
-
-    critical_vru = (vru_exposure_score >= 40) & (speed_limit_gap_score >= 70)
-
-    return pd.Series(
-        np.select(
-            [
-                (speed_safety_score >= 80) | critical_vru,
-                speed_safety_score >= 60,
-                speed_safety_score >= 40,
-            ],
-            [
-                "high_priority_review",
-                "review",
-                "monitor",
-            ],
-            default="aligned",
-        ),
-        index=speed_safety_score.index,
-    )
-
-
-def score_segments(
-    df: pd.DataFrame,
-    config: ScoreConfig | None = None
-) -> pd.DataFrame:
     if config is None:
         config = ScoreConfig()
 
-    result = df.copy()
+    labels = pd.Series(index=score.index, dtype="object")
+    labels.loc[score < config.thresholds["high_priority_review"]] = "high_priority_review"
+    labels.loc[(score >= config.thresholds["high_priority_review"]) & (score < config.thresholds["review"])] = "review"
+    labels.loc[(score >= config.thresholds["review"]) & (score < config.thresholds["monitor"])] = "monitor"
+    labels.loc[score >= config.thresholds["monitor"]] = "aligned"
 
-    required_defaults: Dict[str, Any] = {
-        "posted_speed_limit_kph": np.nan,
-        "operating_speed_kph": np.nan,
-        "road_type": "",
-        "area_type": "",
-        "pedestrian_presence": 0,
-        "cyclist_presence": 0,
-        "ptw_presence": 0,
-        "crossing_density_flag": 0,
-        "commercial_frontage_flag": 0,
-        "transit_stop_flag": 0,
-        "school_zone_flag": 0,
-        "urban_flag": 0,
-        "intersection_density_flag": 0,
-        "roadside_activity_flag": 0,
-        "non_separated_traffic_flag": 0,
-    }
+    if (
+        config.escalation.get("enable_vru_escalation", True)
+        and posted_speed_limit_kph is not None
+        and safe_system_reference_speed_kph is not None
+        and vru_exposure_score is not None
+    ):
+        vru_high_risk = vru_exposure_score < float(config.escalation["vru_high_risk_score_threshold"])
+        mixed_vru_ref = safe_system_reference_speed_kph <= config.safe_speed_mixed_vru_kph
+        high_posted = posted_speed_limit_kph >= float(config.escalation["posted_speed_escalation_threshold_kph"])
 
-    for col, default_value in required_defaults.items():
-        if col not in result.columns:
-            result[col] = default_value
+        escalate_mask = vru_high_risk & mixed_vru_ref & high_posted
+        labels.loc[escalate_mask] = "high_priority_review"
 
-    road_type = result["road_type"].astype(str).str.strip().str.lower()
-    area_type = result["area_type"].astype(str).str.strip().str.lower()
-    vru_presence = result[
-        ["pedestrian_presence", "cyclist_presence", "ptw_presence"]
-    ].max(axis=1).fillna(0)
+    return labels
 
-    # Conservative default:
-    # unknown contexts fall back to 70 km/h unless clear urban/VRU-sensitive
-    # evidence indicates a lower Safe System reference speed.
-    conditions = [
-        area_type.isin({"urban", "peri_urban", "built_up", "school_zone", "market_area"}) & (vru_presence > 0),
-        road_type.isin({"local", "collector", "urban_arterial"}) & (vru_presence > 0),
-        area_type.isin({"urban", "peri_urban", "built_up"}),
-        road_type.isin({"expressway", "motorway", "freeway", "divided_highway"}),
-        road_type.isin({"undivided_highway", "two_way_rural", "rural_arterial"}),
-    ]
 
-    choices = [
-        config.safe_speed_mixed_vru_kph,
-        config.safe_speed_mixed_vru_kph,
-        config.safe_speed_side_conflict_kph,
-        config.safe_speed_head_on_kph,
-        config.safe_speed_head_on_kph,
-    ]
+def score_segments(df: pd.DataFrame, config: ScoreConfig | None = None) -> pd.DataFrame:
+    if config is None:
+        config = load_score_config()
 
-    result["safe_system_reference_speed_kph"] = np.select(
-        conditions,
-        choices,
-        default=config.safe_speed_head_on_kph,
+    out = df.copy()
+
+    posted = _series(out, "posted_speed_limit_kph", 0.0)
+    operating = _series(out, "operating_speed_kph", 0.0)
+
+    out["safe_system_reference_speed_kph"] = derive_safe_system_reference_speed(out, config)
+    out["speed_limit_gap_score"] = compute_speed_limit_gap_score(
+        posted, out["safe_system_reference_speed_kph"]
+    )
+    out["operating_speed_score"] = compute_operating_speed_score(
+        operating, posted
+    )
+    out["vru_exposure_score"] = compute_vru_exposure_score(out)
+    out["context_score"] = compute_context_score(out)
+    out["speed_safety_score"] = compute_speed_safety_score(
+        out["speed_limit_gap_score"],
+        out["operating_speed_score"],
+        out["vru_exposure_score"],
+        out["context_score"],
+        config.weights,
+    )
+    out["priority_label"] = assign_priority_label(
+        out["speed_safety_score"],
+        posted_speed_limit_kph=posted,
+        safe_system_reference_speed_kph=out["safe_system_reference_speed_kph"],
+        vru_exposure_score=out["vru_exposure_score"],
+        config=config,
     )
 
-    result["speed_limit_gap_kph"] = (
-        result["posted_speed_limit_kph"] - result["safe_system_reference_speed_kph"]
-    )
-
-    result["speed_limit_gap_score"] = compute_speed_limit_gap_score(
-        result["posted_speed_limit_kph"],
-        result["safe_system_reference_speed_kph"],
-    )
-
-    clamped_operating = np.maximum(
-        result["operating_speed_kph"].fillna(result["posted_speed_limit_kph"]),
-        result["posted_speed_limit_kph"],
-    )
-
-    result["operating_speed_score"] = compute_operating_speed_score(
-        clamped_operating,
-        result["posted_speed_limit_kph"],
-    )
-
-    result["vru_exposure_score"] = compute_vru_exposure_score(result)
-    result["context_score"] = compute_context_score(result)
-
-    weights = config.weights
-    result["speed_safety_score"] = (
-        result["speed_limit_gap_score"] * weights["speed_gap"]
-        + result["operating_speed_score"] * weights["operating_speed"]
-        + result["vru_exposure_score"] * weights["vru_exposure"]
-        + result["context_score"] * weights["road_context"]
-    ).round(2)
-
-    result["priority_label"] = assign_priority_label(
-        result["speed_safety_score"],
-        result["vru_exposure_score"],
-        result["speed_limit_gap_score"],
-    )
-
-    return result
-
-
-if __name__ == "__main__":
-    sample = pd.DataFrame([
-        {
-            "posted_speed_limit_kph": 60,
-            "operating_speed_kph": 67,
-            "road_type": "collector",
-            "area_type": "urban",
-            "pedestrian_presence": 1,
-            "cyclist_presence": 0,
-            "ptw_presence": 1,
-            "crossing_density_flag": 1,
-            "commercial_frontage_flag": 1,
-            "transit_stop_flag": 0,
-            "school_zone_flag": 0,
-            "urban_flag": 1,
-            "intersection_density_flag": 1,
-            "roadside_activity_flag": 1,
-            "non_separated_traffic_flag": 1,
-        }
-    ])
-
-    scored = score_segments(sample)
-    print(scored[[
-        "posted_speed_limit_kph",
-        "safe_system_reference_speed_kph",
-        "speed_limit_gap_score",
-        "operating_speed_score",
-        "vru_exposure_score",
-        "context_score",
-        "speed_safety_score",
-        "priority_label",
-    ]].to_string(index=False))
+    return out
