@@ -1,0 +1,9 @@
+safe_system:
+  vru_mixed_limit_kph: 30
+  side_impact_limit_kph: 50
+  head_on_limit_kph: 70
+weights:
+  speed_gap: 0.35
+  operating_speed: 0.20
+  vru_exposure: 0.25
+  road_context: 0.20
