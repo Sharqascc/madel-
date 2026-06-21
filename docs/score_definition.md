@@ -58,7 +58,7 @@ Where:
 0.35 + 0.20 + 0.25 + 0.20 = 1.00
 \]
 
-`configs/scoring.yaml` is the authoritative source for production tuning.
+The configuration file `configs/scoring.yaml` is the authoritative source for production tuning.
 
 ## Safe System Reference Speeds
 
@@ -67,7 +67,7 @@ The implementation uses three baseline reference speeds:
 - 50 km/h for side-conflict environments.
 - 70 km/h for lower-conflict or head-on-dominant environments.
 
-The exact branch logic is implemented in code using observed contextual variables.
+The exact branch logic is implemented in code using contextual indicators such as VRU presence, urban setting, and conflict-related road attributes.
 
 ## Component Logic
 
