@@ -73,6 +73,8 @@ def load_score_config(config_path: str = "configs/scoring.yaml") -> ScoreConfig:
 
 
 def _clip_0_100(values: pd.Series | np.ndarray | float) -> pd.Series:
+    if isinstance(values, pd.Series):
+        return values.clip(lower=0.0, upper=100.0)
     return pd.Series(np.clip(values, 0.0, 100.0))
 
 
