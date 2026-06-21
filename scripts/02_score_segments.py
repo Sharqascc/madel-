@@ -1,35 +1,66 @@
+#!/usr/bin/env python3
 from __future__ import annotations
 
-import argparse
+import sys
 from pathlib import Path
 
 import pandas as pd
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
+from ai4saferroads.data_loader import load_or_generate_segments
+from ai4saferroads.geo_visualization import create_priority_map
 from ai4saferroads.speed_safety_score import load_score_config, score_segments
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Score road segments using Safe System speed logic.")
-    parser.add_argument("--input", required=True, help="Path to input CSV with segment attributes.")
-    parser.add_argument("--output", required=True, help="Path to output CSV for scored segments.")
-    parser.add_argument(
-        "--config",
-        default="configs/scoring.yaml",
-        help="Path to scoring config YAML.",
-    )
-    args = parser.parse_args()
+    input_path = REPO_ROOT / "data" / "prepared_segments.csv"
+    output_dir = REPO_ROOT / "outputs"
+    output_dir.mkdir(exist_ok=True)
+    map_dir = output_dir / "maps"
+    map_dir.mkdir(exist_ok=True)
 
-    input_path = Path(args.input)
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    print("Loading scoring configuration...")
+    config = load_score_config(REPO_ROOT / "configs" / "scoring.yaml")
 
-    df = pd.read_csv(input_path)
-    config = load_score_config(args.config)
+    if input_path.exists():
+        print(f"Loading real data from {input_path}")
+        df = load_or_generate_segments(input_path=input_path)
+    else:
+        print("Prepared dataset not found; generating synthetic reviewer-friendly demo data.")
+        df = load_or_generate_segments(input_path=None, n=250, seed=42)
+
+    print(f"Scoring {len(df)} segments...")
     scored = score_segments(df, config=config)
-    scored.to_csv(output_path, index=False)
 
-    print(f"Scored {len(scored)} segments")
-    print(f"Saved scored output to: {output_path}")
+    csv_path = output_dir / "scored_segments.csv"
+    scored.to_csv(csv_path, index=False)
+
+    html_map_path = map_dir / "priority_map.html"
+    create_priority_map(scored, output_path=html_map_path)
+
+    print(f"Saved scored segments to: {csv_path}")
+    print(f"Saved interactive map to: {html_map_path}")
+    print("\nPriority label counts:")
+    print(scored["priority_label"].value_counts(dropna=False).to_string())
+    print("\nScore summary:")
+    print(scored["speed_safety_score"].describe().round(2).to_string())
+
+    cols = [
+        "segment_id",
+        "posted_speed_limit_kph",
+        "safe_system_reference_speed_kph",
+        "speed_limit_gap_score",
+        "operating_speed_score",
+        "vru_exposure_score",
+        "context_score",
+        "speed_safety_score",
+        "priority_label",
+    ]
+    preview = scored[cols].head(10)
+    print("\nPreview:")
+    print(preview.to_string(index=False))
 
 
 if __name__ == "__main__":

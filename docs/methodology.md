@@ -1,94 +1,44 @@
 # Methodology
 
-## Overview
+This repository operationalizes a Safe System-oriented screening method for identifying road segments where speed environments may be incompatible with severe-injury prevention goals.
 
-This project evaluates whether posted speed limits are plausibly aligned with Safe System principles using a transparent, rule-based scoring approach. The method integrates road-environment context, observed or inferred operating speed behavior, and vulnerable road user exposure into a segment-level screening framework.
+## Conceptual basis
 
-## Analytical Objective
+The method assumes that survivable speed is context-dependent. Segments with high pedestrian activity, cyclist activity, school influence, market activity, or strong roadside conflict should be evaluated against lower reference speeds than controlled-access or lower-conflict corridors.
 
-The analytical goal is not to estimate crash occurrence directly. Instead, it identifies road segments where current posted speeds appear structurally inconsistent with the severity of conflict likely to occur if a crash happens. This makes the output suitable for network screening, policy triage, and prioritization of more detailed engineering review.
+## Analytical structure
 
-## Safe System Framing
+The pipeline produces a segment-level `speed_safety_score` on a 0-100 scale where higher values indicate safer alignment. The score is a weighted composite of four components:
 
-The methodology follows a Safe System logic in which tolerable impact speeds depend on the exposure of vulnerable road users and the dominant conflict type. Environments with frequent pedestrian or cyclist interaction are assigned lower reference speeds than corridors with lower direct exposure or more separation.
+\[
+\text{speed\_safety\_score} =
+0.35 \cdot S_{gap} +
+0.20 \cdot S_{operating} +
+0.25 \cdot S_{vru} +
+0.20 \cdot S_{context}
+\]
 
-The implementation currently uses three reference speed tiers:
-- 30 km/h for mixed-VRU environments.
-- 50 km/h for side-conflict environments.
-- 70 km/h for lower-conflict or higher-separation environments.
+These weights are loaded from `configs/scoring.yaml`, enabling transparent calibration.
 
-## Data Layers
+## Reference speed logic
 
-The pipeline is designed to work with the challenge data structure and can ingest the following data categories when available:
+The method derives a `safe_system_reference_speed_kph` from road context. Mixed-VRU environments are assigned 30 km/h, side-conflict environments 50 km/h, and lower-conflict/head-on environments 70 km/h.
 
-- Posted speed limits.
-- Operating or proxy speed measures.
-- Road-network characteristics such as urban classification, divided status, and intersection density.
-- VRU and roadside-activity indicators such as schools, markets, crossings, transit stops, and commercial frontage.
-- Segment identifiers and geometry for map output.
+This is implemented as rule-based inference rather than black-box prediction so reviewers can inspect and audit every branch.
 
-## Processing Pipeline
+## Component construction
 
-### 1. Prepare segment-level features
+- `speed_limit_gap_score` penalizes posted speeds above the derived Safe System reference speed.
+- `operating_speed_score` penalizes observed operating speeds above the posted speed limit.
+- `vru_exposure_score` converts VRU risk indicators into an inverted safety score.
+- `context_score` converts urban-form and conflict indicators into an inverted safety score.
 
-Input datasets are harmonized into a segment-level table. Continuous or categorical attributes are standardized into fields used by the scoring functions.
+All component scores are clipped to the 0-100 range.
 
-### 2. Derive Safe System reference speed
+## Escalation rule
 
-A rule-based function assigns `safe_system_reference_speed_kph` using context signals that indicate mixed VRU exposure, side-conflict likelihood, and higher-separation conditions.
+A weighted average can sometimes smooth away dangerous high-VRU/high-speed combinations. To prevent this, the model includes a rule-based escalation override: if VRU risk is high, the reference speed environment is mixed-VRU, and the posted speed remains high, labels are escalated toward `high_priority_review`.
 
-### 3. Compute component scores
+## Reproducibility
 
-Four sub-scores are calculated on a 0-100 scale where higher is safer:
-
-- `speed_limit_gap_score`
-- `operating_speed_score`
-- `vru_exposure_score`
-- `context_score`
-
-The raw VRU and context risk expressions are inverted so that higher unmanaged risk lowers the final sub-score.
-
-### 4. Compute composite score
-
-The final `speed_safety_score` is a weighted linear combination of the four component scores. This provides a transparent and auditable summary measure rather than a black-box prediction.
-
-### 5. Apply escalation override
-
-A deterministic escalation rule ensures that extremely unsafe mixed-VRU conditions cannot be hidden by relatively stronger values in other components.
-
-### 6. Generate map output
-
-Scored segments are sorted and exported into an HTML visualization artifact to support rapid review of high-priority locations.
-
-## Interpretation
-
-The score should be read as a screening and prioritization tool:
-- Higher scores indicate stronger alignment with the implemented Safe System speed logic.
-- Lower scores indicate likely misalignment and higher need for intervention review.
-- The categorical `priority_label` is intended for operational communication, not as a substitute for engineering diagnosis.
-
-## Transparency and Reproducibility
-
-The approach is intentionally rule-based and interpretable:
-- Component weights are stored in configuration.
-- Reference-speed assignment is deterministic.
-- Threshold bands are explicit.
-- VRU escalation conditions are explicit.
-- Unit tests verify critical logic branches.
-
-This design supports reproducibility, policy interpretability, and straightforward recalibration if challenge evaluators or local authorities require parameter updates.
-
-## Limitations
-
-This methodology is a screening framework, not a full crash reconstruction or causal inference model. Output quality depends on the completeness and fidelity of segment attributes, particularly operating speed proxies and VRU-related contextual indicators.
-
-Where the input data are sparse, missing, or proxy-based, the output should be treated as an evidence-informed prioritization layer to be complemented by local expert review.
-
-## Recommended Extensions
-
-Potential future enhancements include:
-- Calibration against observed crash severity outcomes where permitted.
-- More granular conflict typing.
-- Separate treatment for school zones, transit corridors, and market streets.
-- Confidence scoring for segments with sparse supporting data.
-- Spatial smoothing or corridor-level aggregation for policy packaging.
+The repository is runnable without NDA-protected data because the synthetic data generator creates plausible road-segment attributes and coordinates. This allows reviewers to execute the full scoring and visualization workflow immediately.
