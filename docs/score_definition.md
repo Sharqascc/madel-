@@ -1,181 +1,77 @@
-# Speed Safety Score Definition
-
-This document defines the formulas, weights, thresholds, and interpretation rules used to generate the segment-level `speed_safety_score` and `priority_label`.
+# Speed Safety Score
 
 ## Purpose
 
-The score supports proactive screening of road segments where posted speed limits may be inconsistent with Safe System principles. It combines structural speed alignment, operating speed behavior, vulnerable road user exposure, and roadway context into a single interpretable index.
+The Speed Safety Score prioritizes road segments for speed limit review using a transparent, reproducible, and policy-oriented method aligned with Safe System principles.
 
-## Output Fields
+## Inputs
 
-| Field | Meaning |
-|---|---|
-| `posted_speed_limit_kph` | Posted speed limit associated with the segment. |
-| `safe_system_reference_speed_kph` | Context-sensitive reference speed judged to be safer under the implemented Safe System rules. |
-| `speed_limit_gap_score` | Structural alignment score between posted speed and reference speed, scaled 0-100 where higher is safer. |
-| `operating_speed_score` | Behavioral speed-compliance score, scaled 0-100 where higher is safer. |
-| `vru_exposure_score` | Vulnerable road user exposure score after inversion, scaled 0-100 where higher is safer. |
-| `context_score` | Road-context safety score after inversion, scaled 0-100 where higher is safer. |
-| `speed_safety_score` | Final weighted composite score on a 0-100 scale where higher is safer. |
-| `priority_label` | Action-oriented label used to prioritize review. |
+The scoring pipeline uses the prepared segment-level dataset produced by `scripts/01_prepare_data.py`. Key fields used in scoring are:
 
-## Score Direction
+- `posted_speed_limit_kph`
+- `operating_speed_kph`
+- `road_type`
+- `area_type`
+- `pedestrian_presence`
+- `cyclist_presence`
+- `ptw_presence`
+- `urban_flag`
+- `intersection_density_flag`
 
-All component scores are normalized to a 0-100 scale.
+Only segments with `score_eligible_flag == 1` are included in the official score output.
 
-- `100` = strongest alignment with the safer target condition.
-- `0` = strongest indication of systemic risk or misalignment.
-- Higher scores indicate safer conditions.
-- Lower scores indicate higher priority for intervention or policy review.
+## Safe System reference speed
 
-## Composite Formula
+A reference speed is assigned to each segment:
 
-\[
-\text{speed\_safety\_score} =
-w_{gap} \cdot S_{gap} +
-w_{operating} \cdot S_{operating} +
-w_{vru} \cdot S_{vru} +
-w_{context} \cdot S_{context}
-\]
+- 30 kph for segments with mixed vulnerable road user presence.
+- 50 kph for side-conflict environments, including urban or intersection-related contexts.
+- 70 kph for higher-speed head-on environments with lower direct conflict exposure.
 
-Where:
-- \(S_{gap}\) = `speed_limit_gap_score`
-- \(S_{operating}\) = `operating_speed_score`
-- \(S_{vru}\) = `vru_exposure_score`
-- \(S_{context}\) = `context_score`
+## Score components
 
-## Weights
+Each segment receives four subscores from 0 to 100, where higher is safer:
 
-| Component | Symbol | Weight | Interpretation |
-|---|---|---:|---|
-| Speed limit gap | \(w_{gap}\) | 0.35 | Structural policy alignment between posted speed and Safe System reference speed. |
-| Operating speed | \(w_{operating}\) | 0.20 | Behavioral non-compliance layer. |
-| VRU exposure | \(w_{vru}\) | 0.25 | Severity amplifier for pedestrians, cyclists, and powered two-wheelers. |
-| Context | \(w_{context}\) | 0.20 | Road environment and conflict potential. |
+1. **Speed limit gap score**
+   - Based on the difference between posted speed and the Safe System reference speed.
+   - Larger positive gaps reduce the score.
 
-\[
-0.35 + 0.20 + 0.25 + 0.20 = 1.00
-\]
+2. **Operating speed score**
+   - Based on the difference between operating speed and posted speed.
+   - Speeds above the posted limit reduce the score.
 
-## Reference Speeds
+3. **VRU exposure score**
+   - Based on pedestrian, cyclist, and powered two-wheeler presence.
+   - More vulnerable road user exposure reduces the score.
 
-The implementation uses three baseline reference speeds:
-- 30 km/h for mixed-VRU environments;
-- 50 km/h for side-conflict environments;
-- 70 km/h for lower-conflict or head-on-dominant environments.
+4. **Context score**
+   - Based on urban context, intersection density, and road type.
+   - More conflict-prone contexts reduce the score.
 
-The exact assignment is performed by rule-based logic over contextual variables such as VRU presence, school or market activity, urban setting, intersection density, and roadway separation.
+## Weighted final score
 
-## Component Formulas
+The final score is computed as:
 
-### 1. Speed Limit Gap Score
+- 35% speed limit gap score
+- 20% operating speed score
+- 25% VRU exposure score
+- 20% context score
 
-\[
-\Delta_{limit} = \max(0,\; V_{posted} - V_{safe})
-\]
+The final score is clipped to the range 0 to 100.
 
-\[
-S_{gap} = \max(0,\; 100 - (\Delta_{limit}/40)\cdot100)
-\]
+## Priority labels
 
-A zero positive gap yields 100. A 40 km/h or greater positive gap yields 0.
+Priority labels are assigned from the final score:
 
-### 2. Operating Speed Score
+- `aligned`: score >= 75
+- `monitor`: 55 <= score < 75
+- `review`: 35 <= score < 55
+- `high_priority_review`: score < 35
 
-\[
-\Delta_{excess} = \max(0,\; V_{operating} - V_{posted})
-\]
+An escalation rule can still assign `high_priority_review` where vulnerable road user risk is high and posted speed remains materially above the Safe System reference speed.
 
-\[
-S_{operating} = \max(0,\; 100 - (\Delta_{excess}/30)\cdot100)
-\]
+## Notes
 
-A compliant operating speed yields 100. A 30 km/h or greater excess yields 0.
-
-### 3. VRU Exposure Score
-
-Raw VRU risk is computed as:
-
-\[
-R_{vru} =
-30(Pedestrian) +
-20(Cyclist) +
-15(PTW) +
-15(CrossingDensity) +
-10(CommercialFrontage) +
-5(TransitStop) +
-5(SchoolZone)
-\]
-
-The safety-oriented score is:
-
-\[
-S_{vru} = \max(0,\; 100 - R_{vru})
-\]
-
-Higher unmanaged VRU exposure reduces the score.
-
-### 4. Context Score
-
-Raw context risk is computed as:
-
-\[
-R_{context} =
-30(Urban) +
-25(IntersectionDensity) +
-25(RoadsideActivity) +
-20(NonSeparatedTraffic)
-\]
-
-The safety-oriented score is:
-
-\[
-S_{context} = \max(0,\; 100 - R_{context})
-\]
-
-More conflict-prone context reduces the score.
-
-## Priority Labels
-
-| Final Score Band | Priority Label | Meaning |
-|---|---|---|
-| 80.00 – 100.00 | `aligned` | Broadly aligned with the implemented Safe System logic. |
-| 60.00 – 79.99 | `monitor` | Some concerns exist; continue screening and analyst review. |
-| 40.00 – 59.99 | `review` | Meaningful misalignment is present and the segment warrants attention. |
-| 0.00 – 39.99 | `high_priority_review` | High-risk segment requiring urgent attention or intervention. |
-
-## Escalation Override
-
-The implementation applies a deterministic escalation override to avoid severe VRU risk being masked by stronger scores in other components.
-
-A segment is forced to `high_priority_review` when:
-- `vru_exposure_score < 50`,
-- `safe_system_reference_speed_kph <= 30`,
-- and `posted_speed_limit_kph >= 60`.
-
-## Example
-
-For a segment with:
-- `posted_speed_limit_kph = 60`
-- `safe_system_reference_speed_kph = 30`
-- `operating_speed_kph = 68`
-- `vru_exposure_score = 5`
-- `context_score = 0`
-
-The component scores include:
-- `speed_limit_gap_score = 25.00`
-- `operating_speed_score = 73.33`
-
-The composite score is:
-
-\[
-0.35(25.00) + 0.20(73.33) + 0.25(5.00) + 0.20(0.00) = 24.67
-\]
-
-This maps to `high_priority_review`.
-
-## Implementation Notes
-
-- `configs/scoring.yaml` is the tunable configuration source for production values.
-- `src/ai4saferroads/speed_safety_score.py` is the authoritative implementation.
-- Reviewer-facing outputs should preserve both component scores and the final score for interpretability.
+- The model is intentionally interpretable and rule-based.
+- The score is designed to support review prioritization, not to claim direct crash prediction.
+- Thresholds were calibrated to produce usable prioritization bands for reviewer and policy workflows.
