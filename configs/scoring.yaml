@@ -2,18 +2,15 @@ safe_speeds:
   mixed_vru: 30.0
   side_conflict: 50.0
   head_on: 70.0
-
 weights:
   speed_gap: 0.35
-  operating_speed: 0.20
+  operating_speed: 0.2
   vru_exposure: 0.25
-  road_context: 0.20
-
+  road_context: 0.2
 thresholds:
-  high_priority_review: 40.0
-  review: 60.0
-  monitor: 80.0
-
+  high_priority_review: 35.0
+  review: 55.0
+  monitor: 75.0
 escalation:
   enable_vru_escalation: true
   vru_high_risk_score_threshold: 50.0

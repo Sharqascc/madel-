@@ -1,56 +1,59 @@
+
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+import geopandas as gpd
 import pandas as pd
 
 from src.ai4saferroads.speed_safety_score import load_score_config, score_segments
 
+PREPARED_DIR = Path("outputs/prepared")
+SCORED_DIR = Path("outputs/scored")
 
-DEFAULT_PREPARED = Path("outputs/prepared_segments.csv")
-DEFAULT_SCORED = Path("outputs/scored_segments.csv")
-
+COUNTRY_FILES = {
+    "thailand": PREPARED_DIR / "thailand_prepared.geojson",
+    "maharashtra": PREPARED_DIR / "maharashtra_prepared.geojson",
+}
 
 def main() -> None:
     print("Loading scoring configuration...")
     config = load_score_config()
+    SCORED_DIR.mkdir(parents=True, exist_ok=True)
 
-    if not DEFAULT_PREPARED.exists():
-        raise FileNotFoundError(
-            f"Prepared dataset not found at {DEFAULT_PREPARED}. "
-            "Run scripts/01_prepare_data.py first."
-        )
+    for country, path in COUNTRY_FILES.items():
+        if not path.exists():
+            print(f"Skipping {country}: missing {path}")
+            continue
 
-    df = pd.read_csv(DEFAULT_PREPARED)
-    print(f"Scoring {len(df)} segments from: {DEFAULT_PREPARED}")
+        print(f"\nScoring {country}: {path}")
+        gdf = gpd.read_file(path)
 
-    scored = score_segments(df, config)
+        if "score_eligible_flag" in gdf.columns:
+            gdf = gdf[gdf["score_eligible_flag"] == 1].copy()
 
-    DEFAULT_SCORED.parent.mkdir(parents=True, exist_ok=True)
-    scored.to_csv(DEFAULT_SCORED, index=False)
-    print(f"Saved scored segments to: {DEFAULT_SCORED.resolve()}")
+        print(f"Eligible segments: {len(gdf)}")
+        if len(gdf) == 0:
+            print("No eligible segments, skipping.")
+            continue
 
-    print("\nPriority label counts:")
-    print(scored["priority_label"].value_counts())
+        scored = score_segments(gdf, config)
 
-    print("\nScore summary:")
-    print(scored["speed_safety_score"].describe().round(2).to_string())
+        csv_path = SCORED_DIR / f"{country}_scored.csv"
+        geojson_path = SCORED_DIR / f"{country}_scored.geojson"
 
-    cols = [
-        "segment_id",
-        "posted_speed_limit_kph",
-        "safe_system_reference_speed_kph",
-        "speed_limit_gap_score",
-        "operating_speed_score",
-        "vru_exposure_score",
-        "context_score",
-        "speed_safety_score",
-        "priority_label",
-    ]
-    preview_cols = [c for c in cols if c in scored.columns]
-    print("\nPreview:")
-    print(scored[preview_cols].head(10).to_string(index=False))
+        pd.DataFrame(scored.drop(columns="geometry", errors="ignore")).to_csv(csv_path, index=False)
+        if "geometry" in scored.columns:
+            gpd.GeoDataFrame(scored, geometry="geometry", crs=gdf.crs).to_file(geojson_path, driver="GeoJSON")
 
+        print(f"Saved CSV: {csv_path}")
+        print(f"Saved GeoJSON: {geojson_path}")
+        print(scored['priority_label'].value_counts(dropna=False).to_string())
+        print(scored['speed_safety_score'].describe().round(2).to_string())
 
 if __name__ == "__main__":
     main()
