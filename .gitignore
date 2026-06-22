@@ -1,2 +1,8 @@
 __pycache__/
 *.pyc
+
+data/*.geojson
+data/*.gpkg
+data/*.xlsx
+outputs/prepared/*.geojson
+outputs/prepared/*.csv
