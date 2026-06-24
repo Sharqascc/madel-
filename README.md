@@ -1,60 +1,65 @@
-# AI for Safer Roads
+# AI for Safer Roads — Phase 1 Submission
 
-Repository for the ADB AI for Safer Roads Innovation Challenge.
+## Overview
+This repository contains a Phase 1 road-segment risk prioritization workflow for Thailand and Maharashtra.
+The project builds a transparent speed-safety score, ranks high-risk segments, and publishes reviewer-friendly tabular, geospatial, and interactive map outputs.
 
-## Objective
+## What this repository includes
+- A documented scoring definition in `docs/score_definition.md`
+- Scoring configuration in `configs/scoring.yaml`
+- Scoring implementation in `src/ai4saferroads/speed_safety_score.py`
+- Batch scoring pipeline in `scripts/02_score_segments.py`
+- Final ranked summary outputs in `outputs/summary/`
+- Visualization-ready CSV and GeoJSON files in `outputs/viz/`
+- Full scored reviewer-inspection artifacts in `outputs/scored/`
+- Interactive HTML maps in `outputs/maps/`
 
-This project screens road segments for potential speed-limit misalignment under Safe System principles. It generates a transparent segment-level `speed_safety_score`, interpretable priority labels, and a lightweight map artifact for reviewer-facing inspection.
+## Study areas
+- Thailand
+- Maharashtra, India
 
-## Repository Structure
+## Method summary
+The workflow computes a segment-level speed safety score from prepared road-segment attributes, applies calibrated threshold bands, and assigns review priority categories.
+Outputs are designed to support transparent inspection, geospatial visualization, and downstream intervention prioritization.
 
-- `configs/`: scoring weights, thresholds, and escalation settings.
-- `docs/`: score definition and methodology.
-- `src/ai4saferroads/`: core scoring package.
-- `scripts/`: runnable preparation, scoring, and visualization pipeline scripts.
-- `tests/`: unit tests for scoring logic.
-- `outputs/maps/`: generated HTML map outputs.
+## Key outputs
+### Reviewer-first files
+- `outputs/summary/top_100_riskiest_segments_combined.csv`
+- `outputs/summary/top_20_per_country.csv`
+- `outputs/maps/thailand_speed_safety_map.html`
+- `outputs/maps/maharashtra_speed_safety_map.html`
 
-## Pipeline
+### Full scored artifacts
+- `outputs/scored/thailand_scored.csv`
+- `outputs/scored/thailand_scored.geojson`
+- `outputs/scored/maharashtra_scored.csv`
+- `outputs/scored/maharashtra_scored.geojson`
 
-```bash
-python scripts/01_prepare_data.py
-python scripts/02_score_segments.py
-python scripts/03_generate_map.py
+## Repository structure
+```text
+docs/
+configs/
+scripts/
+src/
+outputs/
+  summary/
+  viz/
+  scored/
+  maps/
 ```
 
-## Core Logic
+## How to reproduce in Colab
+1. Clone the repository.
+2. Install dependencies.
+3. Run the data preparation and scoring pipeline.
+4. Export summary tables, visualization layers, and HTML maps.
 
-The scoring pipeline produces:
-- `safe_system_reference_speed_kph`
-- `speed_limit_gap_score`
-- `operating_speed_score`
-- `vru_exposure_score`
-- `context_score`
-- `speed_safety_score`
-- `priority_label`
+## Reviewer notes
+Start with:
+1. `docs/score_definition.md`
+2. `outputs/summary/top_100_riskiest_segments_combined.csv`
+3. Country HTML maps in `outputs/maps/`
+4. Full scored artifacts in `outputs/scored/` for inspection and auditability
 
-The composite index is designed so that higher scores indicate stronger alignment with the implemented Safe System logic, while lower scores indicate higher need for intervention review.
-
-## Configuration
-
-`configs/scoring.yaml` stores:
-- reference speed tiers,
-- component weights,
-- priority thresholds,
-- escalation settings.
-
-## Testing
-
-Run:
-
-```bash
-pytest -q
-```
-
-## Output
-
-The expected submission-facing outputs are:
-- a scored segment table,
-- documentation of methodology and score logic,
-- an HTML map artifact highlighting priority segments.
+## Status
+Current repository state includes committed Phase 1 outputs, map artifacts, and full scored reviewer-inspection files.
