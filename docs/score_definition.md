@@ -47,6 +47,19 @@ Each segment receives four subscores from 0 to 100, where higher is safer:
 4. **Context score**
    - Based on urban context, intersection density, and road type.
    - More conflict-prone contexts reduce the score.
+  
+## Evaluation methodology
+
+The evaluation approach is designed to test whether the score produces policy-useful and internally consistent prioritization outcomes.
+
+The methodology includes:
+
+- Face-validity assessment: verify that segments ranked as highest priority for review have combinations of higher posted speed relative to Safe System reference speed, elevated operating speeds, vulnerable road user exposure, and conflict-prone context.
+- Rank concentration checks: confirm that lower final scores are concentrated among segments with higher inferred risk conditions, and that top-priority segments are meaningfully different from aligned segments.
+- Sensitivity testing: vary selected thresholds and weights within reasonable ranges and confirm that the highest-priority segments remain broadly stable.
+- Cross-context review: compare score behavior across pilot geographies to ensure the method remains interpretable and usable in both highway and urban/peri-urban environments.
+
+This evaluation is intended to assess methodological robustness, interpretability, and policy relevance. It does not claim direct crash prediction and should be interpreted as a prioritization tool for speed limit review.
 
 ## Weighted final score
 
